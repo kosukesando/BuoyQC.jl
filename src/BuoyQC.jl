@@ -1,8 +1,8 @@
 module BuoyQC
 
-export hsigmoid
+export hsigmoid, highpass, detect_spikes, create_spike_template, shift_template, calc_cost, Spike, Template, treat_spike, treat_spike!, fitted_template, fitted_templates
 
-# Write your package code here.
 include("utils.jl")
+include("wavelet_analysis.jl")
 
 end
