@@ -4,6 +4,7 @@ using Peaks
 using Statistics
 using Optim
 using DataFrames
+using Suppressor
 
 const DEFAULT_WAVELET = wavelet(cSym4)
 
