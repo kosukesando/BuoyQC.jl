@@ -13,7 +13,8 @@ export
     treat_spike!,
     fitted_template,
     fitted_templates,
-    detect_spikes_conv
+    detect_spikes_conv,
+    treat_conv
 
 include("utils.jl")
 include("wavelet_analysis.jl")

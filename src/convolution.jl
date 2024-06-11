@@ -6,6 +6,7 @@ using Optim
 using DataFrames
 using DSP
 using PaddedViews
+using Suppressor
 
 function minheight(indices, heights, minheight=0.0)
     i_delete = []
@@ -35,6 +36,7 @@ function detect_spikes_conv(signal; fs=1.28, sup=10)
     signal_conv_full = conv(signal, highpass(hsigmoid.(x, 1, 1)))
     pad = abs(n - length(signal_conv_full))
     signal_conv = signal_conv_full[pad÷2:pad÷2+n-1]
+    # signal_conv = lowpass(signal_conv; f0=1.0)
     # finding peaks and sorting them
     pks = []
     heights = []
@@ -63,27 +65,34 @@ function detect_spikes_conv(signal; fs=1.28, sup=10)
     return pks_comb, heights_comb
 end
 
-function peaks_to_spikes(res_pad, pks; wl=wavelet(cSym4), hw=400)
+function peaks_to_spikes(res_pad, pks, heights; wl=wavelet(cSym4), hw=400)
     spikes = Vector{Spike}(undef, length(pks))
     for i in eachindex(pks)
         pk = pks[i]
-        spike = Spike(pk + hw, res_pad[pk:pk+2*hw, :], 0)
+        spike = Spike(pk + hw, res_pad[pk:pk+2*hw, :], heights[i])
         spikes[i] = spike
     end
     return spikes
 end
 
 
-function treat_conv(signal; wl=wavelet(cSym4), fs=1.28, sup=10, hw=400)
+function treat_conv(signal; wl=wavelet(cSym4), fs=1.28, sup=10, hw=400, strength=0.1, est_spikes=nothing)
     n = length(signal)
-    pks, heights = detect_spikes_conv(signal; sup=sup)
-    res = cwt(signal, wl)
+    pks, heights = @suppress_err detect_spikes_conv(signal; sup=sup)
+    if isnothing(est_spikes)
+        n_pks = length(pks)
+        strength = max(min(1, strength), 0)
+        est_spikes = round(Integer, n_pks * strength)
+    end
+    pks = pks[1:est_spikes]
+    heights = heights[1:est_spikes]
+    res = @suppress_err cwt(signal, wl)
     res_pad = PaddedView(0, res,
         (1:size(res, 1)+hw*2, 1:size(res, 2)),
         (1+hw:size(res, 1)+hw, 1:size(res, 2))
     )
     @assert res_pad[1+hw:size(res, 1)+hw, :] == res
-    spikes = peaks_to_spikes(res_pad, pks; wl=wl, hw=hw)
+    spikes = @suppress_err peaks_to_spikes(res_pad, pks, heights; wl=wl, hw=hw)
 
     templates = Vector{Template}(undef, length(spikes))
     for i in eachindex(spikes)
@@ -100,15 +109,15 @@ function treat_conv(signal; wl=wavelet(cSym4), fs=1.28, sup=10, hw=400)
             res_treated_conv[spike.offset-hw:spike.offset+hw, :],
             spike.amp
         )
-        cost_treat = calc_cost(spike_temp, template)
-        cost_notreat = calc_cost(spike_temp, Template(zeros(Float64, size(template.res))))
+        cost_treat = @suppress_err calc_cost(spike_temp, template)
+        cost_notreat = @suppress_err calc_cost(spike_temp, Template(zeros(Float64, size(template.res)), nothing, nothing))
         if cost_treat < cost_notreat
             res_treated_conv[spike.offset-hw:spike.offset+hw, :] = rep
         end
     end
     res_treated_conv = res_treated_conv[1+hw:n+hw, :]
 
-    signal_treated = icwt(res_treated_conv, wl, DualFrames())
+    signal_treated = @suppress_err icwt(res_treated_conv, wl, DualFrames())
 
     return res_treated_conv, signal_treated
 end

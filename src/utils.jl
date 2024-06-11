@@ -7,6 +7,10 @@ function highpass(x; f0=0.01, fs=1.28)
     filtfilt(digitalfilter(Highpass(f0; fs=fs), Butterworth(4)), x)
 end
 
+function lowpass(x; f0=0.01, fs=1.28)
+    filtfilt(digitalfilter(Lowpass(f0; fs=fs), Butterworth(4)), x)
+end
+
 function _find_next_upcross(signal::AbstractVector, idx::Integer)
     j = max(idx, firstindex(signal))
     while j < lastindex(signal) - 1

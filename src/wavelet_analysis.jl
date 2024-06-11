@@ -18,6 +18,8 @@ end
 
 struct Template <: TruncSignal
     res::AbstractMatrix
+    amp::Union{AbstractFloat,Nothing}
+    width::Union{Integer,Nothing}
 end
 
 function center(trunc_signal::TruncSignal)
@@ -31,7 +33,7 @@ function halfwindow(trunc_signal::TruncSignal)
 end
 
 function detect_spikes(signal; method::Symbol=:lower, hw=200, wl=DEFAULT_WAVELET, sr=1.28, prom=2.0, zeroupcross=true)
-    signal_cwt = cwt(signal, wl)
+    signal_cwt = @suppress_err cwt(signal, wl)
     pks = zeroupcross ? _detect_spikes_zuc(signal, signal_cwt, method; wl=wl, sr=sr, prom=prom) : _detect_spikes_zdc(signal, signal_cwt, method; wl=wl, sr=sr, prom=prom)
     pks = unique(pks)
     spikes = Vector{Spike}()
@@ -78,7 +80,7 @@ function _detect_spikes_zuc(signal::AbstractVector, signal_cwt, method::Symbol; 
 end
 
 function _detect_spikes_zdc(signal::AbstractVector, signal_cwt, method::Symbol; wl=DEFAULT_WAVELET, sr=1.28, prom=2.0)
-    signal_cwt = cwt(signal, wl)
+    signal_cwt = @suppress_err cwt(signal, wl)
     n = length(signal)
     # zdc spikes have pos-neg structure
     pks_pos_pre = _detect_spikes_cwt(signal_cwt, :pos, method; wl=wl, sr=sr, prom=prom)
@@ -103,7 +105,7 @@ end
 
 function _detect_spikes_cwt(signal_cwt, sign::Symbol, method::Symbol; mask=nothing, wl=DEFAULT_WAVELET, sr=1.28, prom=2.0)
     n = size(signal_cwt, 1)
-    freqs = getMeanFreq(computeWavelets(n, wl)[1], sr)
+    freqs = @suppress_err getMeanFreq(computeWavelets(n, wl)[1], sr)
     freqs[1] = 0
     if method === :lower
         res_fmean = vec(sum(signal_cwt[:, 1:length(freqs)÷2], dims=2))
@@ -131,21 +133,21 @@ function _detect_spikes_cwt(signal_cwt, sign::Symbol, method::Symbol; mask=nothi
     return pks
 end
 
-function _find_amplitude(spike::Spike, signal_length::Integer; wl=DEFAULT_WAVELET)
+function _find_amplitude(spike::Spike, signal_length::Integer; wl=DEFAULT_WAVELET, amp_init=spike.amp)
     hw = halfwindow(spike)
     c = center(spike)
-    _template = create_spike_template(signal_length, hw, 1.0, 1; wl=wl)
-    template_amplitude(x) = calc_cost(spike, Template(_template.res .* x))
+    _template = @suppress_err create_spike_template(signal_length, hw, 1.0, 1; wl=wl)
+    template_amplitude(x) = calc_cost(spike, Template(_template.res .* x, nothing, nothing))
 
     # abs(maximum(spike.res[c-10:c+10, :]) - maximum(
     #     _template.res[c-10:c+10, :].*x
     # ))
-    # optres = optimize(template_amplitude, [spike.amp], BFGS())
-    # return optres.minimizer[1]
+    optres = @suppress_err optimize(template_amplitude, [amp_init], BFGS())
+    return optres.minimizer[1]
 
-    return maximum(spike.res[c-10:c+10, 1:size(spike.res, 2)÷2]) / maximum(
-        create_spike_template(signal_length, hw, 1, 1; wl=wl).res[c-10:c+10, 1:size(spike.res, 2)÷2]
-    )
+    # return maximum(spike.res[c-10:c+10, 1:size(spike.res, 2)÷2]) / maximum(
+    #     create_spike_template(signal_length, hw, 1, 1; wl=wl).res[c-10:c+10, 1:size(spike.res, 2)÷2]
+    # )
 end
 
 function _find_offset(spike::Spike, template::Template, amp, init_offset::Integer; width=1, wl=DEFAULT_WAVELET)
@@ -157,19 +159,19 @@ function _find_offset(spike::Spike, template::Template, amp, init_offset::Intege
     for i in start:finish
         costs[i-start+1] = calc_cost(
             spike,
-            _shift_template(template, i - center(template))
+            shift_template(template, i - center(template))
         )
     end
     return start - 1 + argmin(costs) - center(template), costs
 end
 
-function _find_width(spike::Spike, signal_length::Integer, amp::AbstractFloat, offset::Integer; init_width::Integer=1, largest_width::Integer=30, width=1, wl=DEFAULT_WAVELET)
+function _find_width(spike::Spike, signal_length::Integer, amp::AbstractFloat, offset::Integer; init_width::Integer=1, largest_width::Integer=30)
     widths = init_width:largest_width
     _cost_prev = typemax(Float64)
     for i in eachindex(widths)
         _cost = calc_cost(
             spike,
-            _shift_template(create_spike_template(signal_length, halfwindow(spike), amp, widths[i]), offset)
+            shift_template(create_spike_template(signal_length, halfwindow(spike), amp, widths[i]), offset)
         )
         if _cost < _cost_prev
             _cost_prev = _cost
@@ -184,11 +186,11 @@ end
 
 function create_spike_template(signal_length::Integer, hw::Integer, amp, width; f0=0.01, fs=1.28, wl=DEFAULT_WAVELET)
     x = -(signal_length - 1)÷2:signal_length÷2
-    y = highpass(hsigmoid.(x, amp, width))
+    y = highpass(hsigmoid.(x, amp, width); f0=f0, fs=fs)
     # y=filtfilt(digitalfilter(Highpass(f0; fs=fs), Butterworth(4)), hsigmoid.(x.-offset,amp,width))
     res = cwt(y, wl)
     res_trunc = _truncate_template(res, hw)
-    return Template(res_trunc)
+    return Template(res_trunc, amp, width)
 end
 
 function _truncate_template(template_cwt::AbstractMatrix, hw::Integer)
@@ -197,14 +199,14 @@ function _truncate_template(template_cwt::AbstractMatrix, hw::Integer)
     return template_cwt[c-hw:c+hw, :]
 end
 
-function _shift_template(template::Template, offset)
+function shift_template(template::Template, offset)
     res_shifted = circshift(template.res, (offset, 0))
     if offset ≥ 0
         res_shifted[1:offset, :] .= 0
     else
         res_shifted[end+offset:end, :] .= 0
     end
-    return Template(res_shifted)
+    return Template(res_shifted, template.amp, template.width)
 end
 
 function treat_spike(signal_cwt::AbstractMatrix, spike::Spike; wl=DEFAULT_WAVELET)
@@ -212,7 +214,7 @@ function treat_spike(signal_cwt::AbstractMatrix, spike::Spike; wl=DEFAULT_WAVELE
     amp = _find_amplitude(spike, size(signal_cwt, 1); wl=wl)
     template = create_spike_template(size(signal_cwt, 1), hw, amp, 1)
     offset, _ = _find_offset(spike, template, amp, center(spike))
-    template_shifted = _shift_template(template, offset)
+    template_shifted = shift_template(template, offset)
     treated_spike = signal_cwt[spike.offset-halfwindow(spike):spike.offset+halfwindow(spike), :] .- template_shifted.res
     return treated_spike
 end
@@ -223,26 +225,21 @@ function treat_spike!(signal_cwt::AbstractMatrix, spike::Spike; wl=DEFAULT_WAVEL
     amp = _find_amplitude(spike, size(signal_cwt, 1); wl=wl)
     template = create_spike_template(size(signal_cwt, 1), hw, amp, 1)
     offset, _ = _find_offset(spike, template, amp, center(spike))
-    template_shifted = _shift_template(template, offset)
+    template_shifted = shift_template(template, offset)
     signal_cwt[spike.offset-halfwindow(spike):spike.offset+halfwindow(spike), :] -= template_shifted.res
 end
 
 function fitted_template(spike::Spike, signal_length; wl=DEFAULT_WAVELET)
     hw = halfwindow(spike)
     amp = _find_amplitude(spike, signal_length; wl=wl)
-    template = create_spike_template(signal_length, hw, amp, 1)
-    offset, _ = _find_offset(spike, template, amp, center(spike))
-    # offset = 0
+    template = create_spike_template(signal_length, hw, amp, 1; wl=wl)
+    offset, _ = _find_offset(spike, template, amp, center(spike); wl=wl)
     width = _find_width(spike, signal_length, amp, offset)
-    template_fitted = _shift_template(create_spike_template(signal_length, hw, amp, width), offset)
+    template_fitted = shift_template(create_spike_template(signal_length, hw, amp, width; wl=wl), offset)
     if calc_cost(spike, template_fitted) > 1
-        return nothing
+        return create_spike_template(signal_length, hw, 0, width; wl=wl)
     end
     return template_fitted
-end
-
-function hoge()
-    return "hoge"
 end
 
 function fitted_templates(spikes::Vector{Spike}, signal_length)
@@ -262,7 +259,7 @@ function calc_cost(spike::Spike, template::Template; method=:lower)
         diff = abs.(spike.res .- template.res)
         cost = mean(diff) / mean(abs.(spike.res))
     elseif method === :lower
-        lrange = 1:size(spike.res, 2)÷2
+        lrange = 1:size(spike.res, 2)÷3
         diff = abs.(spike.res[:, lrange] .- template.res[:, lrange])
         cost = mean(diff) / mean(abs.(spike.res[:, lrange]))
     else
