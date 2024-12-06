@@ -30,6 +30,7 @@ end
 
 function detect_spikes_conv(signal; fs=1.28, sup=10)
     n = length(signal)
+    signal = signal .- mean(signal)
     dt = 1 / fs
     x = -sup:dt:sup
     # convolution
@@ -75,17 +76,60 @@ function peaks_to_spikes(res_pad, pks, heights; wl=wavelet(cSym4), hw=400)
     return spikes
 end
 
-
-function treat_conv(signal; wl=wavelet(cSym4), fs=1.28, sup=10, hw=400, strength=0.1, est_spikes=nothing)
+function detect_spikes(signal; wl=wavelet(cSym4), fs=1.28, sup=10, hw=400, strength=0.1, est_spikes=nothing)
     n = length(signal)
-    pks, heights = @suppress_err detect_spikes_conv(signal; sup=sup)
+    pks_all, heights_all = @suppress_err detect_spikes_conv(signal; sup=sup)
     if isnothing(est_spikes)
-        n_pks = length(pks)
+        n_pks = length(pks_all)
         strength = max(min(1, strength), 0)
         est_spikes = round(Integer, n_pks * strength)
     end
-    pks = pks[1:est_spikes]
-    heights = heights[1:est_spikes]
+    pks = []
+    heights = []
+    i = 1
+    flags = fill(false, n)
+    while true
+        if (flags[pks_all[i]] == false)
+            push!(pks, pks_all[i])
+            push!(heights, heights_all[i])
+            flags[max(1, pks_all[i] - hw):min(n, pks_all[i] + hw)] .= true
+        end
+        length(pks) >= est_spikes && break
+        i >= length(pks_all) && break
+        i += 1
+    end
+    res = @suppress_err cwt(signal, wl)
+    res_pad = PaddedView(0, res,
+        (1:size(res, 1)+hw*2, 1:size(res, 2)),
+        (1+hw:size(res, 1)+hw, 1:size(res, 2))
+    )
+    @assert res_pad[1+hw:size(res, 1)+hw, :] == res
+    spikes = @suppress_err peaks_to_spikes(res_pad, pks, heights; wl=wl, hw=hw)
+end
+
+
+function treat_conv(signal; wl=wavelet(cSym4), fs=1.28, sup=10, hw=400, strength=0.1, est_spikes=nothing)
+    n = length(signal)
+    pks_all, heights_all = @suppress_err detect_spikes_conv(signal; sup=sup)
+    if isnothing(est_spikes)
+        n_pks = length(pks_all)
+        strength = max(min(1, strength), 0)
+        est_spikes = round(Integer, n_pks * strength)
+    end
+    pks = []
+    heights = []
+    i = 1
+    flags = fill(false, n)
+    while true
+        if (flags[pks_all[i]] == false)
+            push!(pks, pks_all[i])
+            push!(heights, heights_all[i])
+            flags[max(1, pks_all[i] - hw):min(n, pks_all[i] + hw)] .= true
+        end
+        length(pks) >= est_spikes && break
+        i >= length(pks_all) && break
+        i += 1
+    end
     res = @suppress_err cwt(signal, wl)
     res_pad = PaddedView(0, res,
         (1:size(res, 1)+hw*2, 1:size(res, 2)),
