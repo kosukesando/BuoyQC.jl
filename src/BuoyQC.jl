@@ -11,10 +11,10 @@ export
     Template,
     treat_spike,
     treat_spike!,
-    fitted_template,
-    fitted_templates,
+    est_template,
+    est_templates,
     detect_spikes_conv,
-    treat_conv
+    despike_conv
 
 include("utils.jl")
 include("wavelet_analysis.jl")

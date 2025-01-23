@@ -37,7 +37,6 @@ function detect_spikes_conv(signal; fs=1.28, sup=10)
     signal_conv_full = conv(signal, highpass(hsigmoid.(x, 1, 1)))
     pad = abs(n - length(signal_conv_full))
     signal_conv = signal_conv_full[pad÷2:pad÷2+n-1]
-    # signal_conv = lowpass(signal_conv; f0=1.0)
     # finding peaks and sorting them
     pks = []
     heights = []
@@ -66,11 +65,11 @@ function detect_spikes_conv(signal; fs=1.28, sup=10)
     return pks_comb, heights_comb
 end
 
-function peaks_to_spikes(res_pad, pks, heights; wl=wavelet(cSym4), hw=400)
+function peaks_to_spikes(wlcoeff_pad, pks, heights; wl=wavelet(cSym4), hw=400)
     spikes = Vector{Spike}(undef, length(pks))
     for i in eachindex(pks)
         pk = pks[i]
-        spike = Spike(pk + hw, res_pad[pk:pk+2*hw, :], heights[i])
+        spike = Spike(pk + hw, wlcoeff_pad[pk:pk+2*hw, :], heights[i])
         spikes[i] = spike
     end
     return spikes
@@ -98,17 +97,17 @@ function detect_spikes(signal; wl=wavelet(cSym4), fs=1.28, sup=10, hw=400, stren
         i >= length(pks_all) && break
         i += 1
     end
-    res = @suppress_err cwt(signal, wl)
-    res_pad = PaddedView(0, res,
-        (1:size(res, 1)+hw*2, 1:size(res, 2)),
-        (1+hw:size(res, 1)+hw, 1:size(res, 2))
+    wlcoeff = @suppress_err cwt(signal, wl)
+    wlcoeff_pad = PaddedView(0, wlcoeff,
+        (1:size(wlcoeff, 1)+hw*2, 1:size(wlcoeff, 2)),
+        (1+hw:size(wlcoeff, 1)+hw, 1:size(wlcoeff, 2))
     )
-    @assert res_pad[1+hw:size(res, 1)+hw, :] == res
-    spikes = @suppress_err peaks_to_spikes(res_pad, pks, heights; wl=wl, hw=hw)
+    @assert wlcoeff_pad[1+hw:size(wlcoeff, 1)+hw, :] == wlcoeff
+    spikes = @suppress_err peaks_to_spikes(wlcoeff_pad, pks, heights; wl=wl, hw=hw)
 end
 
 
-function treat_conv(signal; wl=wavelet(cSym4), fs=1.28, sup=10, hw=400, strength=0.1, est_spikes=nothing)
+function despike_conv(signal; wl=wavelet(cSym4), fs=1.28, sup=10, hw=400, strength=0.1, est_spikes=nothing)
     n = length(signal)
     pks_all, heights_all = @suppress_err detect_spikes_conv(signal; sup=sup)
     if isnothing(est_spikes)
@@ -130,38 +129,38 @@ function treat_conv(signal; wl=wavelet(cSym4), fs=1.28, sup=10, hw=400, strength
         i >= length(pks_all) && break
         i += 1
     end
-    res = @suppress_err cwt(signal, wl)
-    res_pad = PaddedView(0, res,
-        (1:size(res, 1)+hw*2, 1:size(res, 2)),
-        (1+hw:size(res, 1)+hw, 1:size(res, 2))
+    wlcoeff = @suppress_err cwt(signal, wl)
+    wlcoeff_pad = PaddedView(0, wlcoeff,
+        (1:size(wlcoeff, 1)+hw*2, 1:size(wlcoeff, 2)),
+        (1+hw:size(wlcoeff, 1)+hw, 1:size(wlcoeff, 2))
     )
-    @assert res_pad[1+hw:size(res, 1)+hw, :] == res
-    spikes = @suppress_err peaks_to_spikes(res_pad, pks, heights; wl=wl, hw=hw)
+    @assert wlcoeff_pad[1+hw:size(wlcoeff, 1)+hw, :] == wlcoeff
+    spikes = @suppress_err peaks_to_spikes(wlcoeff_pad, pks, heights; wl=wl, hw=hw)
 
     templates = Vector{Template}(undef, length(spikes))
     for i in eachindex(spikes)
-        templates[i] = fitted_template(spikes[i], n)
+        templates[i] = est_template(spikes[i], n)
     end
 
-    res_treated_conv = copy(res_pad)
+    wlcoeff_treated_conv = copy(wlcoeff_pad)
     for (spike, template) in zip(spikes, templates)
         if isnothing(template)
             continue
         end
-        rep = res_treated_conv[spike.offset-hw:spike.offset+hw, :] - template.res
+        rep = wlcoeff_treated_conv[spike.offset-hw:spike.offset+hw, :] - template.wlcoeff
         spike_temp = Spike(spike.offset,
-            res_treated_conv[spike.offset-hw:spike.offset+hw, :],
+            wlcoeff_treated_conv[spike.offset-hw:spike.offset+hw, :],
             spike.amp
         )
         cost_treat = @suppress_err calc_cost(spike_temp, template)
-        cost_notreat = @suppress_err calc_cost(spike_temp, Template(zeros(Float64, size(template.res)), nothing, nothing))
+        cost_notreat = @suppress_err calc_cost(spike_temp, Template(zeros(Float64, size(template.wlcoeff)), nothing, nothing))
         if cost_treat < cost_notreat
-            res_treated_conv[spike.offset-hw:spike.offset+hw, :] = rep
+            wlcoeff_treated_conv[spike.offset-hw:spike.offset+hw, :] = rep
         end
     end
-    res_treated_conv = res_treated_conv[1+hw:n+hw, :]
+    wlcoeff_treated_conv = wlcoeff_treated_conv[1+hw:n+hw, :]
 
-    signal_treated = @suppress_err icwt(res_treated_conv, wl, DualFrames())
+    signal_treated = @suppress_err icwt(wlcoeff_treated_conv, wl, DualFrames())
 
-    return res_treated_conv, signal_treated
+    return wlcoeff_treated_conv, signal_treated
 end
