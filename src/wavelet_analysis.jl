@@ -11,8 +11,8 @@ const DEFAULT_WAVELET = wavelet(cSym4)
 abstract type TruncSignal end
 
 struct Spike <: TruncSignal
-    wlcoeff::AbstractMatrix
     offset::Integer
+    wlcoeff::AbstractMatrix
     amp::AbstractFloat
 end
 
